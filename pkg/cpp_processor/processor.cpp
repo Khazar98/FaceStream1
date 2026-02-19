@@ -835,19 +835,11 @@ extern "C" {
                                std::vector<unsigned char> face_crop_padded = crop_face_region(frame_raw, orig_w, orig_h, x1, y1, box_w, box_h, &padded_w, &padded_h, 0.5f);
                               
                               // Crop saved to best_shots
-                                                            // Minimum face size: 60x60px (was 40 — too small, causes blurry FP)
-                               if (face_crop.empty() || crop_w < 60 || crop_h < 60) continue;
+                               // Minimum face size: 50x50px
+                               if (face_crop.empty() || crop_w < 50 || crop_h < 50) continue;
                               
                               // Aspect ratio check
                               float ratio = (float)crop_h / crop_w;
-                              // DEBUG: Log aspect ratios for false positive analysis
-                              static int ratio_debug_count = 0;
-                              if (ratio_debug_count++ < 100) {
-                                  std::cerr << "[C++-RATIO] " << cam_id << " Track=" << track_id 
-                                            << " ratio=" << ratio << " conf=" << confidence 
-                                            << " box=" << box_w << "x" << box_h << std::endl;
-                              }
-                              // [FIX] Tighter aspect ratio filter: 1.0 - 1.8 (face-only)
                               if (ratio < 1.0f || ratio > 1.8f) continue;
                               
                               // [NEW] Update track timing
@@ -864,59 +856,18 @@ extern "C" {
                                const int MIN_CONFIRMATIONS = 3;
                                if (contextState.track_detection_count[track_id] < MIN_CONFIRMATIONS) continue;
 
-                               // [NEW] Only process best shot if confidence >= 0.80
-                               // AND sharpness is meaningful (>= 2.0 eliminates tiny/far faces)
-                               if (confidence >= 0.80f) {
+                               // Only store best shot if confidence >= 0.72
+                               if (confidence >= 0.72f) {
                                    float sharpness = calculate_sharpness_sobel(face_crop, crop_w, crop_h);
-                                   if (sharpness < 2.0f) continue; // [FIX] Reject blurry/small faces
-
-                                   // [FIX] Texture uniformity check: walls/floors have very uniform color.
-                                   // Real faces have high color variance (stddev > 15).
-                                   // Confirmed: wall crops stddev ≈ 8-12, face crops stddev > 20.
-                                    float color_stddev = calculate_color_stddev(face_crop);
-                                    
-                                    // [DEBUG] Log all filter values to calibrate thresholds
-                                    auto fp = analyze_face_plausibility(face_crop, crop_w, crop_h);
-                                    static int fp_log_count = 0;
-                                    if (fp_log_count++ < 50) {
-                                        std::cerr << "[FILTER-ALL] track=" << track_id
-                                                  << " stddev=" << color_stddev
-                                                  << " dark%=" << fp.dark_ratio * 100.0f
-                                                  << " bright%=" << fp.bright_ratio * 100.0f
-                                                  << " dynrange=" << fp.dynamic_range
-                                                  << " conf=" << confidence
-                                                  << " sharp=" << sharpness
-                                                  << std::endl;
-                                    }
-
-                                    if (color_stddev < 15.0f) {
-                                        static int stddev_reject_count = 0;
-                                        if (stddev_reject_count++ < 10)
-                                            std::cerr << "[REJECT-STDDEV] track=" << track_id << " stddev=" << color_stddev << std::endl;
-                                        continue;
-                                    }
-                                    
-                                    // [FIX] Face must have dark pixels (eyes/eyebrows).
-                                    // Real face dark_ratio ~5-25%. Beige wall: 0%.
-                                    if (fp.dark_ratio < 0.02f) {
-                                        static int dark_reject_count = 0;
-                                        if (dark_reject_count++ < 10)
-                                            std::cerr << "[REJECT-DARK] track=" << track_id << " dark%=" << fp.dark_ratio*100 << " dynrange=" << fp.dynamic_range << std::endl;
-                                        continue;
-                                    }
-                                    
-                                    // [FIX] Face must have internal contrast (min-max span > 40).
-                                    // Beige wall: all pixels ~180±15 → dynrange ~25-35.
-                                    if (fp.dynamic_range < 40.0f) {
-                                        static int range_reject_count = 0;
-                                        if (range_reject_count++ < 10)
-                                            std::cerr << "[REJECT-RANGE] track=" << track_id << " dynrange=" << fp.dynamic_range << std::endl;
-                                        continue;
-                                    }
                                    
-                                  float brightness = calculate_brightness(face_crop);
-                                  float sqrt_sharpness = std::sqrt(sharpness);
-                                  float quality_score = (confidence * 20.0f) + sqrt_sharpness;
+                                   // Face plausibility: must have dark pixels (eyes/eyebrows) and contrast
+                                   auto fp = analyze_face_plausibility(face_crop, crop_w, crop_h);
+                                   if (fp.dark_ratio < 0.02f) continue;   // no eyes/eyebrows → not a face
+                                   if (fp.dynamic_range < 40.0f) continue; // uniform texture → not a face
+
+                                   float brightness = calculate_brightness(face_crop);
+                                   float sqrt_sharpness = std::sqrt(sharpness);
+                                   float quality_score = (confidence * 10.0f) + sqrt_sharpness;
 
                                   if (contextState.best_shots.find(track_id) == contextState.best_shots.end() || 
                                       quality_score > contextState.best_shots[track_id].quality_score) {
