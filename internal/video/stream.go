@@ -44,7 +44,7 @@ func NewRTSPStream(cameraID, rtspURL string, bufferSize int) *RTSPStream {
 	return &RTSPStream{
 		URL:       rtspURL,
 		CameraID:  cameraID,
-		frameChan: make(chan *Frame, bufferSize),
+		frameChan: make(chan *Frame, 30), // Larger buffer: reduces backpressure drops
 		stopChan:  make(chan struct{}),
 		isRunning: false,
 	}
@@ -102,6 +102,7 @@ func (rs *RTSPStream) readFrames() {
 	width := int(rs.avCtx.width) 
 	height := int(rs.avCtx.height)
 	frameSize := width * height * 3
+	errorCount := 0
 
 	for {
 		select {
@@ -129,9 +130,10 @@ func (rs *RTSPStream) readFrames() {
 
 			// 2. Read Frame directly into buffer
 			ret := C.read_frame(rs.avCtx, (*C.uchar)(dataPtr), C.int(frameSize))
-			
+
 			if ret == 0 {
-				// Success
+				// Success — pass buffer ownership to consumer
+				errorCount = 0
 				frame := &Frame{
 					Data:      dataSlice,
 					DataPtr:   dataPtr,
@@ -142,15 +144,29 @@ func (rs *RTSPStream) readFrames() {
 
 				select {
 				case rs.frameChan <- frame:
-					// Sent
+					// Consumer now owns the buffer; FreeFrame called after ProcessFramePtr
 				case <-rs.stopChan:
+					// [FIX] We allocated but cannot send — zero and discard
+					for i := range dataSlice {
+						dataSlice[i] = 0
+					}
 					return
 				}
 			} else {
-				// Error or EOF or Timeout
-				// log.Printf("[RTSP] Camera %s: Read error or EOF (ret: %d)", rs.CameraID, ret)
-				// Small sleep to avoid busy loop on error
-				time.Sleep(10 * time.Millisecond)
+				// [FIX] read_frame failed but buffer was allocated.
+				// Pinned memory pool may return the SAME address next call.
+				// If we don't zero it, stale pixel data goes to TRT → false positive.
+				if dataPtr != nil {
+					for i := range dataSlice {
+						dataSlice[i] = 0
+					}
+				}
+				errorCount++
+				if errorCount > 50 {
+					log.Printf("[RTSP] Camera %s: Max consecutive errors reached (%d), closing stream", rs.CameraID, errorCount)
+					return
+				}
+				time.Sleep(100 * time.Millisecond)
 			}
 		}
 	}

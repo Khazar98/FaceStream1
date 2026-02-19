@@ -13,6 +13,7 @@ RtspContext* open_rtsp_stream(const char* url) {
     av_dict_set(&options, "rtsp_transport", "tcp", 0); // Force TCP for reliability
     av_dict_set(&options, "buffer_size", "1024000", 0);
     av_dict_set(&options, "max_delay", "500000", 0); // 0.5s max delay
+    av_dict_set(&options, "stimeout", "5000000", 0); // 5s socket timeout (Critical for TCP)
 
     if (avformat_open_input(&ctx->format_ctx, url, NULL, &options) != 0) {
         fprintf(stderr, "[FFmpeg] Failed to open stream: %s\n", url);

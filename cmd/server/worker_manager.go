@@ -46,7 +46,7 @@ type FrameRequest struct {
 // Yeni WorkerManager instansı yaradır.
 func NewWorkerManager() *WorkerManager {
 	wm := &WorkerManager{
-		batchQueue: make(chan FrameRequest, 2000), // Buffer high for 100 cameras
+		batchQueue: make(chan FrameRequest, 500), // 4 streams × 32 batch = 128 concurrent
 	}
 	go wm.startBatchProcessor()
 	return wm
@@ -151,8 +151,8 @@ func (m *WorkerManager) GetStatus() map[string]interface{} {
 
 // [BATCH] Global Batch Processor
 func (m *WorkerManager) startBatchProcessor() {
-	const batchSize = 128
-	const timeout = 30 * time.Millisecond
+	const batchSize = 32              // Matches per-stream TRT buffer size
+	const timeout = 8 * time.Millisecond // 8ms ≈ 120 FPS cycle
 
 	buffer := make([]FrameRequest, 0, batchSize)
 	ticker := time.NewTicker(timeout)

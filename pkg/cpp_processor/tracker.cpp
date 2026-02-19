@@ -124,5 +124,13 @@ std::vector<Track> BoTSORT::update(const std::vector<std::vector<float>>& input_
         [this](const Track& t){ return t.time_since_update > this->max_time_lost; });
     tracked_stracks.erase(it, tracked_stracks.end());
     
-    return tracked_stracks;
+    // Only return tracks that were matched/updated in THIS frame.
+    // Returning stale tracks (time_since_update > 0) causes wrong crops:
+    // their bbox is from a previous frame, applied to current frame data.
+    std::vector<Track> active;
+    active.reserve(tracked_stracks.size());
+    for (const auto& tr : tracked_stracks) {
+        if (tr.time_since_update == 0) active.push_back(tr);
+    }
+    return active;
 }
